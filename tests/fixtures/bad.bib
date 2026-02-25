@@ -1,0 +1,114 @@
+% Intentionally broken / problematic bib file for testing error detection.
+%
+% Problems introduced:
+%  1. Completely fabricated paper (nonexistent title + authors) -- MANUAL_REVIEW expected
+%  2. Undefined @String macro reference
+%  3. Duplicate cite key
+%  4. @misc with journal field (should become @article)
+%  5. Raw long-form venue name instead of @String macro
+%  6. Missing required field (no 'year' on an @article)
+%  7. arXiv entry with inline 'arXiv preprint' journal string instead of macro
+%  8. Another fabricated paper with invented DOI-style field
+
+@String{CVPR = {CVPR}}
+@String{ICLR = {ICLR}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 1. Completely fabricated paper – will not be found online
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@article{fakeauthor2026unicorn,
+  author  = {Fakename, Alice and Invented, Bob and Nonexistent, Carol},
+  title   = {Hyperbolically Optimal Unicorn Diffusion via Quantum Spaghetti Networks},
+  journal = {Journal of Imaginary Science},
+  year    = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 2. Undefined @String macro (BADCONF is not defined and
+%    is not in CANONICAL_STRINGS)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@inproceedings{ghost2026missing,
+  author    = {Ghost, Author},
+  title     = {A Paper That References an Undefined String},
+  booktitle = BADCONF,
+  year      = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 3a. Duplicate cite key (first occurrence)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@inproceedings{dupkey2026paper,
+  author    = {Smith, John},
+  title     = {First Paper with This Key},
+  booktitle = CVPR,
+  year      = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 3b. Duplicate cite key (second occurrence -- ERROR)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@inproceedings{dupkey2026paper,
+  author    = {Jones, Jane},
+  title     = {Second Paper with the Same Key},
+  booktitle = ICLR,
+  year      = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 4. @misc that has a journal= field (should become @article)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@misc{misc2026wrongtype,
+  author  = {Zhang, Wei and Li, Fang},
+  title   = {A Miscategorized Article About Deep Learning},
+  journal = {IEEE Transactions on Neural Networks and Learning Systems},
+  year    = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 5. Raw long-form venue string instead of @String macro
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@inproceedings{rawvenue2026paper,
+  author    = {Nguyen, An and Pham, Binh},
+  title     = {A Paper with a Verbose Unabbreviated Venue},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  year      = {2025}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 6. Missing required field: @article without 'year'
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@article{noyear2026missing,
+  author  = {Doe, Jane},
+  title   = {An Article Missing Its Year Field},
+  journal = {Nature Machine Intelligence}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 7. arXiv preprint with raw inline journal string
+%    (should be detected as arXiv, flagged for upgrade/review)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@article{fakearxiv2026preprint,
+  author  = {Nobody, Alice and Nemo, Bob},
+  title   = {Completely Invented Gradient Descent on Imaginary Manifolds},
+  journal = {arXiv preprint arXiv:2601.99999},
+  year    = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 8. Another fabricated paper -- different fabricated authors
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@inproceedings{invented2026conf,
+  author    = {Madeup, Xavier and Unreal, Yolanda and Phantom, Zach},
+  title     = {Revolutionary Attention Mechanism That Does Not Exist},
+  booktitle = {Proceedings of the Annual Conference on Papers That Were Never Written},
+  year      = {2026}
+}

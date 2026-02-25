@@ -1,0 +1,56 @@
+% Fixture testing arXiv → published upgrade logic.
+% Uses real arXiv IDs for papers known to have been published.
+% The checker (with network) should upgrade these to formal publications.
+% In offline/mocked tests we verify the detection and flag correctly.
+
+@String{ARXIV = {arXiv}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Real arXiv preprint (cs.LG 2026-02-25) -- genuinely only on arXiv
+% Should be detected, searched, flagged for manual review (or upgraded)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@article{ghadia2026ulysses,
+  author    = {Ghadia, Rahul and Abraham, Mathew and Vorobyov, Sergey
+               and Ryabinin, Max},
+  title     = {Untied {Ulysses}: Memory-Efficient Context Parallelism
+               via Headwise Chunking},
+  journal   = ARXIV,
+  eprint    = {2602.21196},
+  year      = {2026}
+}
+
+@article{zhang2026selaur,
+  author    = {Zhang, Dong and Liu, Xin and Cheng, Long and Wang, Yue
+               and Murray, Kevin and Wei, Hao},
+  title     = {{SELAUR}: Self Evolving {LLM} Agent via Uncertainty-aware Rewards},
+  journal   = ARXIV,
+  eprint    = {2602.21158},
+  year      = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Paper with explicit arXiv URL in url= field (alternate detection path)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@misc{lu2026seeing,
+  author       = {Lu, Jianglin and Jenni, Simon and Kafle, Kushal
+                  and Shi, Jing and Zhao, Handong and Fu, Yun},
+  title        = {Seeing Through Words: Controlling Visual Retrieval Quality
+                  with Language Models},
+  url          = {https://arxiv.org/abs/2602.21175},
+  year         = {2026}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Paper with archivePrefix + eprint (standard arXiv encoding)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@misc{deschenaux2026diffusion,
+  author        = {Deschenaux, Justin and Gulcehre, Caglar and Sahoo, Subhajit Sahu},
+  title         = {The Diffusion Duality, Chapter {II}: {$\Psi$}-Samplers and
+                   Efficient Curriculum},
+  archiveprefix = {arXiv},
+  eprint        = {2602.21185},
+  year          = {2026}
+}

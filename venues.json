@@ -1,0 +1,44 @@
+{
+  "_comment": "User-defined venue mappings. This file is safe to commit.",
+  "_format": {
+    "aliases": {
+      "<normalized raw venue string>": "<CANONICAL_KEY>"
+    },
+    "strings": {
+      "<CANONICAL_KEY>": "<display name / BibTeX @String value>"
+    }
+  },
+  "aliases": {
+    "arxiv preprint arxiv:2112.10741": "APA21",
+    "arxiv preprint arxiv:2207.12598": "APA21",
+    "biometrika": "B",
+    "foundations and trends in machine learning": "FTML",
+    "ieee computer graphics and applications": "ICGA",
+    "ieee transactions on consumer electronics": "ITCE",
+    "information processing letters": "IPL",
+    "international conference on computer vision (iccv)": "CVI",
+    "journal of functional analysis": "JFA",
+    "journal of image and vision computing": "JIVC",
+    "journal of machine learning research": "JMLR",
+    "journal of mathematical imaging and vision": "JMIV",
+    "proceedings of the ieee/cvf winter conference on applications of computer vision (wacv)": "ICWACVW",
+    "scale space and variational methods in computer vision": "SSVMCV",
+    "siam journal on imaging sciences": "SJIS"
+  },
+  "strings": {
+    "APA21": "arXiv preprint arXiv:2112.10741",
+    "B": "Biometrika",
+    "CVI": "International Conference on Computer Vision (ICCV)",
+    "FTML": "Foundations and Trends in Machine Learning",
+    "ICGA": "IEEE Computer Graphics and Applications",
+    "ICWACVW": "Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)",
+    "IPL": "Information Processing Letters",
+    "ITCE": "IEEE Transactions on Consumer Electronics",
+    "JFA": "Journal of Functional Analysis",
+    "JIVC": "Journal of Image and Vision Computing",
+    "JMIV": "Journal of Mathematical Imaging and Vision",
+    "JMLR": "Journal of Machine Learning Research",
+    "SJIS": "SIAM Journal on Imaging Sciences",
+    "SSVMCV": "Scale Space and Variational Methods in Computer Vision"
+  }
+}
