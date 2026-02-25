@@ -1,4 +1,4 @@
-# BibTeX Reference Checker
+# Citegeist: BibTeX Reference Checker
 
 Checks, standardizes, and upgrades `.bib` files automatically.
 
@@ -19,7 +19,6 @@ Checks, standardizes, and upgrades `.bib` files automatically.
 Requires Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-cd latex_reference_checker
 uv sync
 ```
 
@@ -93,7 +92,7 @@ ACMMM, BMVC, ICPR, CGF, EGSR, ARXIV, and more.
 ## Project structure
 
 ```
-latex_reference_checker/
+/
 ├── pyproject.toml
 └── bib_checker/
     ├── cli.py       – argument parsing and entry point
