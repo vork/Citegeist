@@ -71,10 +71,9 @@ def generate_report(
         _append_issues_table(lines, errors)
 
     # --- Manual review ---
-    manual = [i for i in issues if i.issue_type == IssueType.MANUAL_REVIEW]
     arxiv_no_pub = [i for i in issues
                     if i.issue_type == IssueType.ARXIV_NOT_FOUND_PUBLISHED]
-    if manual or arxiv_no_pub:
+    if arxiv_no_pub:
         lines.append(_section("Manual Review Required", 2))
         lines.append(
             "The following entries are still arXiv preprints and no published "
@@ -86,10 +85,12 @@ def generate_report(
                 lines.append(f"- **`{iss.key}`** – {iss.message}")
                 seen_keys.add(iss.key)
 
-    # --- Warnings ---
-    if warnings:
+    # --- Warnings (excluding arXiv-not-found, already shown in Manual Review) ---
+    other_warnings = [i for i in warnings
+                      if i.issue_type != IssueType.ARXIV_NOT_FOUND_PUBLISHED]
+    if other_warnings:
         lines.append(_section("Warnings", 2))
-        _append_issues_table(lines, warnings)
+        _append_issues_table(lines, other_warnings)
 
     # --- Changes applied ---
     if infos:
@@ -145,7 +146,8 @@ def print_summary(issues: list[Issue], out: TextIO = sys.stderr) -> None:
     errors   = sum(1 for i in issues if i.level == IssueLevel.ERROR)
     warnings = sum(1 for i in issues if i.level == IssueLevel.WARNING)
     upgraded = sum(1 for i in issues if i.issue_type == IssueType.ARXIV_UPGRADED)
-    manual   = sum(1 for i in issues if i.issue_type == IssueType.MANUAL_REVIEW)
+    manual   = sum(1 for i in issues if i.issue_type in (
+        IssueType.MANUAL_REVIEW, IssueType.ARXIV_NOT_FOUND_PUBLISHED))
 
     print(f"\n{'='*60}", file=out)
     print(f" RESULTS", file=out)

@@ -146,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Stats ---
     n_upgraded = sum(1 for i in issues if i.issue_type == IssueType.ARXIV_UPGRADED)
-    n_manual   = sum(1 for i in issues if i.issue_type == IssueType.MANUAL_REVIEW)
+    n_manual   = sum(1 for i in issues if i.issue_type in (
+        IssueType.MANUAL_REVIEW, IssueType.ARXIV_NOT_FOUND_PUBLISHED))
 
     # --- Write fixed bib ---
     used_macros = _collect_used_macros(fixed_entries)

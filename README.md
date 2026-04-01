@@ -7,7 +7,7 @@ Checks, standardizes, and upgrades `.bib` files automatically.
 | Feature | Description |
 |---------|-------------|
 | **Venue standardization** | Detects common spellings of conference/journal names and replaces them with canonical `@String` macros |
-| **arXiv → published upgrade** | Searches Semantic Scholar, CrossRef, arXiv, and Perplexity AI to find the formal publication venue for preprints |
+| **arXiv → published upgrade** | Searches Semantic Scholar, CrossRef, arXiv, Google Scholar, and Perplexity AI to find the formal publication venue for preprints |
 | **DuckDuckGo verification** | Confirms every found publication exists on the web to guard against LLM hallucinations |
 | **Entry type inference** | Fixes `@misc` → `@article` or `@inproceedings` based on available fields |
 | **Missing field detection** | Warns about required fields absent from entries |
@@ -39,7 +39,27 @@ uv run bib-check references.bib
 | `--offline` | Skip all network lookups |
 | `--no-upgrade` | Skip arXiv → published upgrade (venue standardization still runs) |
 | `--perplexity-key KEY` | Perplexity AI API key (overrides `PERPLEXITY_API_KEY` env var) |
+| `--s2-key KEY` | Semantic Scholar API key for higher rate limits (overrides `SEMANTIC_SCHOLAR_API_KEY` env var) |
+| `--no-scholar` | Disable the Google Scholar search backend |
+| `--no-learn-venues` | Do not save newly discovered venues to `venues.json` |
 | `-v` | Verbose: print search progress to stderr |
+
+## Semantic Scholar API key
+
+Semantic Scholar is the primary search backend. By default requests are
+unauthenticated (~1 req / 3.5 s). Providing an API key raises the limit
+to ~10 req / s:
+
+1. Get a free key at <https://www.semanticscholar.org/product/api#api-key>
+2. Pass it via environment variable or CLI flag:
+
+```bash
+export SEMANTIC_SCHOLAR_API_KEY=...
+uv run bib-check references.bib
+
+# or inline:
+uv run bib-check references.bib --s2-key ...
+```
 
 ## Perplexity AI integration
 
@@ -69,13 +89,26 @@ stopping at the first confirmed published result):
 1. Semantic Scholar  (structured API, most complete venue data)
 2. CrossRef          (DOI-indexed published works)
 3. arXiv             (journal_ref / DOI sometimes present)
-4. Perplexity AI     (web search + LLM; requires API key)
+4. Google Scholar    (broad academic coverage; requires `scholarly` package)
+5. Perplexity AI     (web search + LLM; requires API key)
    └→ DuckDuckGo     (verifies result to catch hallucinations)
-5. DuckDuckGo        (soft-verify S2 / CrossRef results too)
+6. DuckDuckGo        (soft-verify S2 / CrossRef results too)
 ```
 
 Papers that cannot be confirmed as published are flagged for **manual review**
 in the report.
+
+## Google Scholar support
+
+Google Scholar is used as a fallback search backend via the
+[scholarly](https://github.com/scholarly-python-package/scholarly) package.
+
+```bash
+uv sync --group scholar
+```
+
+Once installed, Google Scholar is enabled automatically. Disable it with
+`--no-scholar` if needed.
 
 ## Output
 
@@ -99,7 +132,7 @@ ACMMM, BMVC, ICPR, CGF, EGSR, ARXIV, and more.
     ├── checker.py   – main checking logic
     ├── parser.py    – BibTeX parser (no external deps)
     ├── writer.py    – BibTeX serializer
-    ├── search.py    – arXiv / S2 / CrossRef / Perplexity / DDG backends
+    ├── search.py    – arXiv / S2 / CrossRef / Google Scholar / Perplexity / DDG backends
     ├── strings.py   – canonical @String definitions and alias table
     ├── datatypes.py – shared data classes
     └── report.py    – Markdown report generator

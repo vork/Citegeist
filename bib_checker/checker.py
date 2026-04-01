@@ -14,6 +14,7 @@ from .strings import (
     normalize_venue_key, save_user_venue,
 )
 from .search import PublicationLookup, _title_similarity
+from .writer import _protect_caps
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +56,50 @@ def _raw_to_display(raw: str, strings: dict) -> str:
     return strip_braces(v)
 
 
+ARXIV_DOI_RE = re.compile(r"10\.48550/arxiv\.(\d{4}\.\d{4,5})", re.IGNORECASE)
+
+
+def _extract_arxiv_id_from_fields(entry: dict) -> Optional[str]:
+    """Try to extract an arXiv ID from eprint, DOI, or URL fields."""
+    eprint = strip_braces(entry.get("eprint", ""))
+    if eprint:
+        m = ARXIV_ID_RE.search(eprint)
+        if m:
+            return m.group(1)
+
+    doi = strip_braces(entry.get("doi", ""))
+    if doi:
+        m = ARXIV_DOI_RE.search(doi)
+        if m:
+            return m.group(1)
+
+    url = strip_braces(entry.get("url", ""))
+    if url:
+        m = ARXIV_ID_RE.search(url)
+        if m:
+            return m.group(1)
+
+    return None
+
+
+def _has_real_venue(entry: dict, strings: dict) -> bool:
+    """Return True if the entry already has a non-arXiv venue/journal."""
+    for vf in VENUE_FIELDS:
+        raw = entry.get(vf, "").strip()
+        if raw:
+            display = _raw_to_display(raw, strings)
+            if not ARXIV_JOURNAL_RE.search(display):
+                return True
+    return False
+
+
 def _is_arxiv_entry(entry: dict, strings: dict) -> Optional[str]:
     """
     Return the arXiv ID if this entry is (or appears to be) an arXiv preprint,
     else None.
+
+    Entries that already have a real (non-arXiv) venue are never treated as
+    arXiv preprints, even if they carry an arXiv URL or DOI.
     """
     # Check journal/booktitle for 'arxiv'
     for vf in VENUE_FIELDS:
@@ -66,24 +107,16 @@ def _is_arxiv_entry(entry: dict, strings: dict) -> Optional[str]:
         if raw:
             display = _raw_to_display(raw, strings)
             if ARXIV_JOURNAL_RE.search(display):
-                eprint = strip_braces(entry.get("eprint", ""))
-                if eprint:
-                    return eprint
-                # Try to extract ID from the display text (e.g. "arXiv preprint arXiv:2112.10741")
-                m = ARXIV_ID_RE.search(display)
-                if m:
-                    return m.group(1)
-                url = strip_braces(entry.get("url", ""))
-                m = ARXIV_ID_RE.search(url)
-                if m:
-                    return m.group(1)
-                return "unknown"
+                return _extract_arxiv_id_from_fields(entry) or "unknown"
 
-    # Check URL field
+    # If the entry already has a real venue, don't flag it as arXiv
+    if _has_real_venue(entry, strings):
+        return None
+
+    # Check URL field (only for entries without a real venue)
     url = strip_braces(entry.get("url", ""))
     if ARXIV_URL_RE.search(url):
-        m = ARXIV_ID_RE.search(url)
-        return m.group(1) if m else "unknown"
+        return _extract_arxiv_id_from_fields(entry) or "unknown"
 
     # Check eprint + archiveprefix
     eprint = strip_braces(entry.get("eprint", ""))
@@ -94,8 +127,7 @@ def _is_arxiv_entry(entry: dict, strings: dict) -> Optional[str]:
     # publisher = arxiv (some entries use this)
     pub = _raw_to_display(entry.get("publisher", ""), strings)
     if ARXIV_JOURNAL_RE.search(pub):
-        eprint = strip_braces(entry.get("eprint", ""))
-        return eprint if eprint else "unknown"
+        return _extract_arxiv_id_from_fields(entry) or "unknown"
 
     return None
 
@@ -238,7 +270,7 @@ def _normalize_single_author(name: str) -> str:
     # Walk backwards to collect the family name block.
     family_parts = [parts[-1]]
     i = len(parts) - 2
-    while i >= 0 and parts[i].lower() in _PARTICLES:
+    while i >= 0 and parts[i].lower() in _PARTICLES and parts[i].islower():
         family_parts.insert(0, parts[i])
         i -= 1
     given_parts = parts[:i + 1]
@@ -561,14 +593,15 @@ class BibChecker:
             if published.title and published.title != title:
                 sim = _title_similarity(title, published.title)
                 if sim >= 0.7:
-                    new_entry["title"] = f"{{{published.title}}}"
+                    protected_title = _protect_caps(published.title)
+                    new_entry["title"] = f"{{{protected_title}}}"
                     issues.append(Issue(
                         key=key,
                         level=IssueLevel.INFO,
                         issue_type=IssueType.FIELD_NORMALIZED,
                         message="Updated title to match authoritative source",
                         old_value=title,
-                        new_value=published.title,
+                        new_value=protected_title,
                     ))
 
             if published.authors:
@@ -596,12 +629,6 @@ class BibChecker:
                     f"arXiv preprint (ID: {arxiv_id}) – no published version found. "
                     "Please verify manually."
                 ),
-            ))
-            issues.append(Issue(
-                key=key,
-                level=IssueLevel.WARNING,
-                issue_type=IssueType.MANUAL_REVIEW,
-                message="Manual review required: check if this paper has been published.",
             ))
             return updated, issues
 
