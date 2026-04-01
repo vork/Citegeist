@@ -9,7 +9,10 @@ from typing import Optional
 
 from .datatypes import Issue, IssueLevel, IssueType, Paper
 from .parser import get_field, is_macro, strip_braces
-from .strings import CANONICAL_STRINGS, lookup_venue, normalize_venue_key, save_user_venue
+from .strings import (
+    CANONICAL_STRINGS, is_plausible_venue, lookup_venue,
+    normalize_venue_key, save_user_venue,
+)
 from .search import PublicationLookup, _title_similarity
 
 
@@ -45,10 +48,10 @@ ARXIV_JOURNAL_RE = re.compile(r"arxiv", re.IGNORECASE)
 def _raw_to_display(raw: str, strings: dict) -> str:
     """Resolve a raw field value to its display string."""
     v = raw.strip()
-    # bare macro
     if v in strings:
         return strings[v]["value"]
-    # braced or quoted
+    if v in CANONICAL_STRINGS:
+        return CANONICAL_STRINGS[v]
     return strip_braces(v)
 
 
@@ -63,11 +66,13 @@ def _is_arxiv_entry(entry: dict, strings: dict) -> Optional[str]:
         if raw:
             display = _raw_to_display(raw, strings)
             if ARXIV_JOURNAL_RE.search(display):
-                # Try to get eprint
                 eprint = strip_braces(entry.get("eprint", ""))
                 if eprint:
                     return eprint
-                # Try from URL
+                # Try to extract ID from the display text (e.g. "arXiv preprint arXiv:2112.10741")
+                m = ARXIV_ID_RE.search(display)
+                if m:
+                    return m.group(1)
                 url = strip_braces(entry.get("url", ""))
                 m = ARXIV_ID_RE.search(url)
                 if m:
@@ -157,10 +162,46 @@ def _suggest_venue_key(display: str) -> str:
     return key or "UNKNOWN"
 
 
+def _authors_overlap(original_str: str, found_authors: list[str]) -> bool:
+    """
+    Check if there's meaningful last-name overlap between the original author
+    string and the list of found authors.  Used to reject wrong search matches.
+    """
+    def _extract_lastnames(text: str) -> set[str]:
+        parts = re.split(r'\s+and\s+', text, flags=re.IGNORECASE)
+        lastnames = set()
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            if ',' in part:
+                lastname = part.split(',')[0].strip().lower()
+            else:
+                words = part.split()
+                lastname = words[-1].strip().lower() if words else ""
+            if len(lastname) > 1:
+                lastnames.add(lastname)
+        return lastnames
+
+    orig_lastnames = _extract_lastnames(strip_braces(original_str))
+    found_lastnames = _extract_lastnames(" and ".join(found_authors))
+
+    if not orig_lastnames or not found_lastnames:
+        return True  # can't determine — give benefit of doubt
+
+    overlap = orig_lastnames & found_lastnames
+    return len(overlap) >= 1
+
+
 def _is_conference_venue(key: str) -> bool:
     """Heuristic: is this canonical key a conference (vs journal)?"""
-    JOURNAL_KEYS = {"PAMI", "IJCV", "TIP", "TVCG", "TMM", "TCSVT", "TOG",
-                    "CGF", "SPL", "PR", "SIGGRAPH", "SIGGRAPHASIA", "ARXIV"}
+    JOURNAL_KEYS = {
+        "PAMI", "IJCV", "TIP", "TVCG", "TMM", "TCSVT", "TOG", "CGF",
+        "SPL", "PR", "SIGGRAPH", "SIGGRAPHASIA", "ARXIV",
+        "TRO", "RAL", "IJRR", "JMLR", "TMLR", "JAIR", "AIJ",
+        "NATURE", "NATURECOMM", "NATUREMI", "SCIENCE", "SCIENCEADV",
+        "SCIROBOT", "PNAS", "TACL", "TNNLS", "MIA", "CSUR",
+    }
     return key not in JOURNAL_KEYS
 
 
@@ -352,35 +393,37 @@ class BibChecker:
                 ))
             else:
                 # Unknown venue: flag it, and optionally learn it
+                if not is_plausible_venue(display_val):
+                    continue
                 norm = normalize_venue_key(display_val)
-                # Only warn for non-trivial venue strings
-                if len(norm) > 4:
-                    suggested_key = _suggest_venue_key(display_val)
-                    if self.learn_venues and display_val:
-                        save_user_venue(display_val, suggested_key, display_val)
-                        issues.append(Issue(
-                            key=key,
-                            level=IssueLevel.INFO,
-                            issue_type=IssueType.SUSPICIOUS_VENUE,
-                            message=(
-                                f"Unrecognized venue in '{vf}': '{display_val}'. "
-                                f"Suggested macro '{suggested_key}' saved to venues.json – "
-                                "please review and edit the display name there."
-                            ),
-                            old_value=display_val,
-                            new_value=suggested_key,
-                        ))
-                    else:
-                        issues.append(Issue(
-                            key=key,
-                            level=IssueLevel.WARNING,
-                            issue_type=IssueType.SUSPICIOUS_VENUE,
-                            message=(
-                                f"Unrecognized venue in '{vf}': '{display_val}'. "
-                                "Consider adding a @String macro."
-                            ),
-                            old_value=display_val,
-                        ))
+                if len(norm) <= 4:
+                    continue
+                suggested_key = _suggest_venue_key(display_val)
+                if self.learn_venues:
+                    save_user_venue(display_val, suggested_key, display_val)
+                    issues.append(Issue(
+                        key=key,
+                        level=IssueLevel.INFO,
+                        issue_type=IssueType.SUSPICIOUS_VENUE,
+                        message=(
+                            f"Unrecognized venue in '{vf}': '{display_val}'. "
+                            f"Suggested macro '{suggested_key}' saved to venues.json – "
+                            "please review and edit the display name there."
+                        ),
+                        old_value=display_val,
+                        new_value=suggested_key,
+                    ))
+                else:
+                    issues.append(Issue(
+                        key=key,
+                        level=IssueLevel.WARNING,
+                        issue_type=IssueType.SUSPICIOUS_VENUE,
+                        message=(
+                            f"Unrecognized venue in '{vf}': '{display_val}'. "
+                            "Consider adding a @String macro."
+                        ),
+                        old_value=display_val,
+                    ))
 
         return updated, issues
 
@@ -433,6 +476,24 @@ class BibChecker:
         if not arxiv_id:
             return updated, issues
 
+        # --- Normalize arXiv entry: always @article with journal = ARXIV ---
+        etype = updated.get("__type__", "misc")
+        if etype != "article":
+            updated["__type__"] = "article"
+            issues.append(Issue(
+                key=key,
+                level=IssueLevel.INFO,
+                issue_type=IssueType.ENTRY_TYPE_FIXED,
+                message=f"Changed @{etype} → @article (arXiv preprint)",
+                old_value=etype,
+                new_value="article",
+            ))
+
+        updated.pop("booktitle", None)
+        if updated.get("journal", "").strip() != "ARXIV":
+            updated["journal"] = "ARXIV"
+
+        # --- Network search ---
         if self.skip_network:
             issues.append(Issue(
                 key=key,
@@ -443,19 +504,27 @@ class BibChecker:
             return updated, issues
 
         self._log(f"\n[{key}] Searching for published version of arXiv:{arxiv_id}...")
-        results = self.lookup.find_published(title)
+        results = self.lookup.find_published(title, arxiv_id=arxiv_id)
 
         published = results.get("published_result")
         verified = results.get("verified", False)
+
+        # Validate author overlap to prevent wrong matches
+        if published and published.authors:
+            original_author_str = entry.get("author", "")
+            if original_author_str and not _authors_overlap(original_author_str, published.authors):
+                self._log(f"  [{key}] Rejecting published match: author mismatch")
+                published = None
+                verified = False
+
         if published and published.doi:
             venue_str = published.venue or "(unknown venue)"
             verified_note = " [DuckDuckGo verified ✓]" if verified else ""
             new_entry = _build_arxiv_entry(updated, published, strings)
 
-            # Fix title if the authoritative source has a better spelling
             if published.title and published.title != title:
                 sim = _title_similarity(title, published.title)
-                if sim >= 0.7:   # close enough – trust the remote title
+                if sim >= 0.7:
                     new_entry["title"] = f"{{{published.title}}}"
                     issues.append(Issue(
                         key=key,
@@ -466,7 +535,6 @@ class BibChecker:
                         new_value=published.title,
                     ))
 
-            # Fix authors if the remote source has a normalized list
             if published.authors:
                 remote_authors = " and ".join(published.authors)
                 new_entry["author"] = f"{{{remote_authors}}}"

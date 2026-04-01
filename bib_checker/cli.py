@@ -66,6 +66,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--s2-key",
+        metavar="KEY",
+        default=None,
+        help=(
+            "Semantic Scholar API key for higher rate limits "
+            "(overrides SEMANTIC_SCHOLAR_API_KEY env var). "
+            "Free keys at https://www.semanticscholar.org/product/api#api-key"
+        ),
+    )
+    p.add_argument(
+        "--no-scholar",
+        action="store_true",
+        help=(
+            "Disable the Google Scholar search backend. "
+            "By default, Google Scholar is used as a fallback when the "
+            "scholarly package is installed (pip install scholarly)."
+        ),
+    )
+    p.add_argument(
         "--no-learn-venues",
         action="store_true",
         help=(
@@ -107,7 +126,12 @@ def main(argv: list[str] | None = None) -> int:
     # --- Check ---
     skip_network = args.offline or args.no_upgrade
     lookup = (
-        PublicationLookup(verbose=args.verbose, perplexity_api_key=args.perplexity_key)
+        PublicationLookup(
+            verbose=args.verbose,
+            perplexity_api_key=args.perplexity_key,
+            s2_api_key=args.s2_key,
+            use_scholar=not args.no_scholar,
+        )
         if not skip_network else None
     )
     checker = BibChecker(

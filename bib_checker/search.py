@@ -2,10 +2,13 @@
 Publication lookup backends:
 
 1. ArxivSearch            – queries the arXiv API by title
-2. SemanticScholarSearch  – queries the Semantic Scholar API (free, no key needed)
+2. SemanticScholarSearch  – queries the Semantic Scholar API by arXiv ID or title
+                            (free; optional SEMANTIC_SCHOLAR_API_KEY for higher rate limits)
 3. CrossRefSearch         – queries the CrossRef REST API (free, no key needed)
-4. PerplexitySearch       – uses Perplexity AI API (requires PERPLEXITY_API_KEY env var)
-5. DuckDuckGoVerifier     – confirms paper existence via DuckDuckGo instant-answer API
+4. GoogleScholarSearch    – queries Google Scholar via the ``scholarly`` package
+                            (optional; install with ``pip install scholarly``)
+5. PerplexitySearch       – uses Perplexity AI API (requires PERPLEXITY_API_KEY env var)
+6. DuckDuckGoVerifier     – confirms paper existence via DuckDuckGo instant-answer API
                             (used to verify results from other backends, especially Perplexity)
 
 All search backends implement find_by_title(title) -> Optional[Paper].
@@ -57,25 +60,47 @@ _load_dotenv()
 _LAST_REQUEST: dict[str, float] = {}
 
 
+def _parse_retry_after(header_val: Optional[str]) -> float:
+    """Parse a Retry-After header (seconds or HTTP-date) into seconds to wait."""
+    if not header_val:
+        return 5.0
+    try:
+        return max(1.0, float(header_val))
+    except (ValueError, TypeError):
+        return 5.0
+
+
 def _rate_limited_get(url: str, min_interval: float = 1.0, source: str = "default",
-                       headers: dict | None = None) -> Optional[str]:
-    """Fetch *url* with a per-source rate limit. Returns body or None on error."""
+                       headers: dict | None = None,
+                       max_retries: int = 3) -> Optional[str]:
+    """Fetch *url* with a per-source rate limit and 429 retry with exponential backoff."""
     now = time.time()
     since = now - _LAST_REQUEST.get(source, 0)
     if since < min_interval:
         time.sleep(min_interval - since)
-    _LAST_REQUEST[source] = time.time()
 
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", "bib-checker/1.0 (mailto:user@example.com)")
-    if headers:
-        for k, v in headers.items():
-            req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read().decode("utf-8")
-    except Exception:
-        return None
+    for attempt in range(1 + max_retries):
+        _LAST_REQUEST[source] = time.time()
+
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "bib-checker/1.0 (mailto:user@example.com)")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries:
+                wait = _parse_retry_after(e.headers.get("Retry-After"))
+                # Exponential backoff: base wait * 2^attempt, capped at 30s
+                wait = min(wait * (2 ** attempt), 30.0)
+                time.sleep(wait)
+                continue
+            return None
+        except Exception:
+            return None
+    return None
 
 
 def _clean_title(title: str) -> str:
@@ -205,23 +230,137 @@ class ArxivSearch:
 
 class SemanticScholarSearch:
     """
-    Query the Semantic Scholar Graph API (no API key required for basic use).
-    Can find papers published in venues even if they started as arXiv preprints.
+    Query the Semantic Scholar Graph API.
+
+    Supports three lookup modes (in order of preference):
+    1. **By arXiv ID** — exact lookup via ``/paper/arXiv:{id}`` (near-100% hit rate)
+    2. **By title (match)** — ``/paper/search/match`` returns the single best match
+    3. **By title (search)** — ``/paper/search`` returns relevance-ranked results
+
+    Rate limits (as of 2025):
+    - Without API key: ~100 requests / 5 min → 1 req / 3 s
+    - With API key:    ~100 requests / 1 s  → effectively no throttle needed
+
+    An optional ``SEMANTIC_SCHOLAR_API_KEY`` env var enables higher rate limits.
+    Free keys are available at https://www.semanticscholar.org/product/api#api-key
     """
 
-    BASE = "https://api.semanticscholar.org/graph/v1/paper/search"
+    PAPER_URL = "https://api.semanticscholar.org/graph/v1/paper"
+    SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+    MATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search/match"
     FIELDS = "title,authors,year,venue,externalIds,publicationVenue,journal,publicationTypes"
-    MIN_INTERVAL = 1.0
 
-    def find_by_title(self, title: str) -> Optional[Paper]:
+    INTERVAL_UNAUTH = 3.5   # conservative for unauthenticated (100 req / 5 min)
+    INTERVAL_AUTH = 0.1     # generous for authenticated (100 req / sec)
+
+    def __init__(self):
+        self.api_key: Optional[str] = os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+
+    @property
+    def _interval(self) -> float:
+        return self.INTERVAL_AUTH if self.api_key else self.INTERVAL_UNAUTH
+
+    def _headers(self) -> dict | None:
+        if self.api_key:
+            return {"x-api-key": self.api_key}
+        return None
+
+    def _paper_from_data(self, p: dict) -> Paper:
+        """Build a Paper from a single S2 API response object."""
+        ext_ids = p.get("externalIds", {}) or {}
+        doi = ext_ids.get("DOI")
+        arxiv_id = ext_ids.get("ArXiv")
+
+        venue = p.get("venue") or ""
+        pub_venue = p.get("publicationVenue") or {}
+        if not venue and pub_venue:
+            venue = pub_venue.get("name", "")
+
+        journal_info = p.get("journal") or {}
+        if not venue and isinstance(journal_info, dict):
+            venue = journal_info.get("name", "")
+
+        authors = [a.get("name", "") for a in (p.get("authors") or [])]
+        year = p.get("year")
+
+        return Paper(
+            title=p.get("title", ""),
+            authors=authors,
+            doi=doi,
+            venue=venue,
+            year=year,
+            arxiv_id=arxiv_id,
+            url=f"https://doi.org/{doi}" if doi else None,
+        )
+
+    # ── Direct lookup by arXiv ID (most reliable) ──────────────────────
+
+    def find_by_arxiv_id(self, arxiv_id: str) -> Optional[Paper]:
+        """Exact lookup via the S2 ``/paper/arXiv:{id}`` endpoint."""
+        if not arxiv_id or arxiv_id == "unknown":
+            return None
+        url = f"{self.PAPER_URL}/arXiv:{arxiv_id}?fields={self.FIELDS}"
+        body = _rate_limited_get(
+            url, self._interval, source="semanticscholar",
+            headers=self._headers(),
+        )
+        if not body:
+            return None
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return None
+        if not data.get("title"):
+            return None
+        return self._paper_from_data(data)
+
+    # ── Title match (single best result) ───────────────────────────────
+
+    def _find_by_match(self, title: str) -> Optional[Paper]:
+        """Use the /paper/search/match endpoint for exact title matching."""
         cleaned = _clean_title(title)
         params = urllib.parse.urlencode({
             "query": cleaned,
-            "limit": 3,
             "fields": self.FIELDS,
         })
-        url = f"{self.BASE}?{params}"
-        body = _rate_limited_get(url, self.MIN_INTERVAL, source="semanticscholar")
+        url = f"{self.MATCH_URL}?{params}"
+        body = _rate_limited_get(
+            url, self._interval, source="semanticscholar",
+            headers=self._headers(),
+        )
+        if not body:
+            return None
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return None
+
+        # /search/match returns {"data": [single_paper]} or 404
+        papers = data.get("data", [])
+        if not papers:
+            return None
+
+        p = papers[0]
+        found_title = p.get("title", "")
+        if _title_similarity(title, found_title) < 0.6:
+            return None
+        return self._paper_from_data(p)
+
+    # ── Fuzzy title search (relevance-ranked) ──────────────────────────
+
+    def _find_by_search(self, title: str) -> Optional[Paper]:
+        """Fallback: use /paper/search for broader matching."""
+        cleaned = _clean_title(title)
+        params = urllib.parse.urlencode({
+            "query": cleaned,
+            "limit": 5,
+            "fields": self.FIELDS,
+        })
+        url = f"{self.SEARCH_URL}?{params}"
+        body = _rate_limited_get(
+            url, self._interval, source="semanticscholar",
+            headers=self._headers(),
+        )
         if not body:
             return None
 
@@ -230,40 +369,25 @@ class SemanticScholarSearch:
         except json.JSONDecodeError:
             return None
 
-        papers = data.get("data", [])
         best: Optional[Paper] = None
         best_sim = 0.0
-
-        for p in papers:
+        for p in data.get("data", []):
             found_title = p.get("title", "")
             sim = _title_similarity(title, found_title)
             if sim < 0.6 or sim <= best_sim:
                 continue
             best_sim = sim
-
-            ext_ids = p.get("externalIds", {}) or {}
-            doi = ext_ids.get("DOI")
-            arxiv_id = ext_ids.get("ArXiv")
-
-            venue = p.get("venue") or ""
-            pub_venue = p.get("publicationVenue") or {}
-            if not venue and pub_venue:
-                venue = pub_venue.get("name", "")
-
-            authors = [a.get("name", "") for a in (p.get("authors") or [])]
-            year = p.get("year")
-
-            best = Paper(
-                title=found_title,
-                authors=authors,
-                doi=doi,
-                venue=venue,
-                year=year,
-                arxiv_id=arxiv_id,
-                url=f"https://doi.org/{doi}" if doi else None,
-            )
-
+            best = self._paper_from_data(p)
         return best
+
+    # ── Public API ─────────────────────────────────────────────────────
+
+    def find_by_title(self, title: str) -> Optional[Paper]:
+        """Try /search/match first (precise), then fall back to /search."""
+        result = self._find_by_match(title)
+        if result:
+            return result
+        return self._find_by_search(title)
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +457,109 @@ class CrossRefSearch:
             )
 
         return best
+
+
+# ---------------------------------------------------------------------------
+# Google Scholar backend (requires `scholarly` package: pip install scholarly)
+# ---------------------------------------------------------------------------
+
+try:
+    from scholarly import scholarly as _scholarly
+    _HAS_SCHOLARLY = True
+except ImportError:
+    _HAS_SCHOLARLY = False
+
+
+class GoogleScholarSearch:
+    """
+    Query Google Scholar via the ``scholarly`` Python package.
+
+    This backend is **optional** — it is only active when ``scholarly`` is
+    installed (``pip install scholarly`` or ``pip install bib-checker[scholar]``).
+
+    Google Scholar has the broadest coverage of any academic search engine but
+    aggressively rate-limits automated access.  ``scholarly`` handles retries
+    and can be configured with proxies (see its docs).  Without proxies you
+    may get blocked after ~15-20 queries in quick succession.
+
+    Because of the rate-limiting risk this backend runs late in the pipeline,
+    only when Semantic Scholar + CrossRef have both failed to find a published
+    version.
+    """
+
+    MIN_INTERVAL = 5.0  # conservative to avoid Google blocks
+
+    @property
+    def available(self) -> bool:
+        return _HAS_SCHOLARLY
+
+    def find_by_title(self, title: str) -> Optional[Paper]:
+        if not _HAS_SCHOLARLY:
+            return None
+
+        cleaned = _clean_title(title)
+
+        now = time.time()
+        since = now - _LAST_REQUEST.get("google_scholar", 0)
+        if since < self.MIN_INTERVAL:
+            time.sleep(self.MIN_INTERVAL - since)
+        _LAST_REQUEST["google_scholar"] = time.time()
+
+        try:
+            results = _scholarly.search_pubs(cleaned)
+            pub = next(results, None)
+        except Exception:
+            return None
+
+        if not pub:
+            return None
+
+        bib = pub.get("bib", {})
+        found_title = bib.get("title", "")
+        if not found_title:
+            return None
+
+        sim = _title_similarity(title, found_title)
+        if sim < 0.6:
+            return None
+
+        venue = bib.get("venue", "") or bib.get("journal", "") or bib.get("booktitle", "")
+        year_raw = bib.get("pub_year")
+        year = int(year_raw) if year_raw and str(year_raw).isdigit() else None
+
+        raw_authors = bib.get("author", "")
+        if isinstance(raw_authors, str):
+            authors = [a.strip() for a in raw_authors.split(" and ") if a.strip()]
+        elif isinstance(raw_authors, list):
+            authors = list(raw_authors)
+        else:
+            authors = []
+
+        pub_url = pub.get("pub_url") or bib.get("url") or ""
+        eprint = pub.get("eprint_url", "") or ""
+
+        doi: Optional[str] = None
+        if "doi.org/" in pub_url:
+            doi = pub_url.split("doi.org/", 1)[1]
+        elif "doi.org/" in eprint:
+            doi = eprint.split("doi.org/", 1)[1]
+
+        arxiv_id: Optional[str] = None
+        for candidate in (pub_url, eprint):
+            m = re.search(r'arxiv\.org/abs/(\d{4}\.\d+)', candidate)
+            if m:
+                arxiv_id = m.group(1)
+                break
+
+        return Paper(
+            title=found_title,
+            authors=authors,
+            doi=doi,
+            venue=venue or None,
+            year=year,
+            arxiv_id=arxiv_id,
+            url=pub_url or None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -539,24 +766,32 @@ class PublicationLookup:
     favouring results that have a DOI (published) over arXiv-only.
 
     Pipeline:
-    1. Semantic Scholar  (structured API, reliable, free)
-    2. CrossRef          (DOI database, very reliable for published papers)
-    3. arXiv             (preprint server; also has journal_ref / DOI sometimes)
-    4. Perplexity AI     (web search + LLM, great recall; requires API key)
-       └→ DuckDuckGo     (verifies Perplexity results to catch hallucinations)
+    0. Semantic Scholar by arXiv ID  (exact lookup, highest reliability)
+    1. Semantic Scholar by title     (structured API, reliable, free)
+    2. CrossRef                      (DOI database, very reliable for published papers)
+    3. Google Scholar                (broadest coverage; optional, requires ``scholarly``)
+    4. arXiv                         (preprint server; also has journal_ref / DOI sometimes)
+    5. Perplexity AI                 (web search + LLM, great recall; requires API key)
+       └→ DuckDuckGo                 (verifies Perplexity results to catch hallucinations)
     """
 
-    def __init__(self, verbose: bool = False, perplexity_api_key: Optional[str] = None):
+    def __init__(self, verbose: bool = False,
+                 perplexity_api_key: Optional[str] = None,
+                 s2_api_key: Optional[str] = None,
+                 use_scholar: bool = True):
         self.arxiv = ArxivSearch()
         self.s2 = SemanticScholarSearch()
         self.crossref = CrossRefSearch()
+        self.gscholar = GoogleScholarSearch()
         self.perplexity = PerplexitySearch()
         self.ddg = DuckDuckGoVerifier()
         self.verbose = verbose
+        self.use_scholar = use_scholar
 
-        # Allow explicit key override (e.g. from CLI --perplexity-key flag)
         if perplexity_api_key:
             self.perplexity.api_key = perplexity_api_key
+        if s2_api_key:
+            self.s2.api_key = s2_api_key
 
     def _log(self, msg: str) -> None:
         if self.verbose:
@@ -572,27 +807,46 @@ class PublicationLookup:
             return True
         return False
 
-    def find_published(self, title: str) -> dict:
+    def find_published(self, title: str,
+                       arxiv_id: Optional[str] = None) -> dict:
         """
         Return a dict with keys:
           - arxiv_result: Paper or None
           - published_result: Paper or None  (has DOI / non-arXiv venue)
           - best: Paper or None
           - verified: bool  (True if published_result was confirmed by DuckDuckGo)
+
+        If *arxiv_id* is supplied the Semantic Scholar exact lookup is attempted
+        first which is much more reliable than title search.
         """
         arxiv_result: Optional[Paper] = None
         published_result: Optional[Paper] = None
         verified = False
 
-        # 1. Semantic Scholar (most likely to know about final venue)
-        self._log(f"Semantic Scholar: '{title[:60]}'")
-        ss = self.s2.find_by_title(title)
-        if ss:
-            self._log(f"  -> found: '{ss.title}' venue={ss.venue} doi={ss.doi}")
-            if self._is_published(ss):
-                published_result = ss
-            elif ss.arxiv_id:
-                arxiv_result = ss
+        # 0. Semantic Scholar direct arXiv ID lookup (near-perfect accuracy)
+        if arxiv_id and arxiv_id != "unknown":
+            self._log(f"S2 arXiv ID lookup: arXiv:{arxiv_id}")
+            s2_direct = self.s2.find_by_arxiv_id(arxiv_id)
+            if s2_direct:
+                self._log(
+                    f"  -> found: '{s2_direct.title}' "
+                    f"venue={s2_direct.venue} doi={s2_direct.doi}"
+                )
+                if self._is_published(s2_direct):
+                    published_result = s2_direct
+                else:
+                    arxiv_result = s2_direct
+
+        # 1. Semantic Scholar title search (if direct lookup didn't yield a published result)
+        if not published_result:
+            self._log(f"Semantic Scholar: '{title[:60]}'")
+            ss = self.s2.find_by_title(title)
+            if ss:
+                self._log(f"  -> found: '{ss.title}' venue={ss.venue} doi={ss.doi}")
+                if self._is_published(ss):
+                    published_result = ss
+                elif ss.arxiv_id and not arxiv_result:
+                    arxiv_result = ss
 
         # 2. CrossRef for DOI confirmation
         if not published_result:
@@ -602,7 +856,22 @@ class PublicationLookup:
                 self._log(f"  -> found: '{cr.title}' doi={cr.doi}")
                 published_result = cr
 
-        # 3. arXiv as fallback / extra info
+        # 3. Google Scholar (optional, broadest coverage)
+        if not published_result and self.use_scholar and self.gscholar.available:
+            self._log(f"Google Scholar: '{title[:60]}'")
+            gs = self.gscholar.find_by_title(title)
+            if gs:
+                self._log(
+                    f"  -> found: '{gs.title}' venue={gs.venue} doi={gs.doi}"
+                )
+                if self._is_published(gs):
+                    published_result = gs
+                elif gs.arxiv_id and not arxiv_result:
+                    arxiv_result = gs
+        elif not self.gscholar.available and self.use_scholar:
+            self._log("Google Scholar: skipped (scholarly not installed)")
+
+        # 4. arXiv as fallback / extra info
         if not arxiv_result:
             self._log(f"arXiv: '{title[:60]}'")
             ax = self.arxiv.find_by_title(title)
@@ -612,7 +881,7 @@ class PublicationLookup:
                 if ax.doi and not published_result:
                     published_result = ax
 
-        # 4. Perplexity AI (web search + LLM) – only if no published result yet
+        # 5. Perplexity AI (web search + LLM) – only if no published result yet
         if not published_result and self.perplexity.available:
             self._log(f"Perplexity: '{title[:60]}'")
             px = self.perplexity.find_by_title(title)
@@ -622,12 +891,11 @@ class PublicationLookup:
                     f"venue={px.venue} doi={px.doi}"
                 )
                 if self._is_published(px):
-                    # Verify via DuckDuckGo before accepting
                     self._log(
                         f"  -> Verifying via DuckDuckGo: doi={px.doi} venue={px.venue}"
                     )
                     ok = self.ddg.verify(title, doi=px.doi, venue=px.venue)
-                    self._log(f"  -> DuckDuckGo verification: {'PASS ✓' if ok else 'FAIL ✗'}")
+                    self._log(f"  -> DuckDuckGo verification: {'PASS' if ok else 'FAIL'}")
                     if ok:
                         published_result = px
                         verified = True
@@ -636,15 +904,13 @@ class PublicationLookup:
                             "  -> Perplexity result NOT verified by DuckDuckGo – discarding"
                         )
                 elif px.arxiv_id and not arxiv_result:
-                    # Even if not published, useful arXiv info
-                    # Still verify the arxiv id makes sense
                     ok = self.ddg.verify(title)
                     if ok:
                         arxiv_result = px
         elif not self.perplexity.available:
             self._log("Perplexity: skipped (PERPLEXITY_API_KEY not set)")
 
-        # 5. DuckDuckGo verify the non-Perplexity published result if not yet verified
+        # 6. DuckDuckGo verify the non-Perplexity published result if not yet verified
         if published_result and not verified:
             self._log(
                 f"DuckDuckGo verify: '{title[:50]}' doi={published_result.doi}"
@@ -653,9 +919,7 @@ class PublicationLookup:
                 title, doi=published_result.doi, venue=published_result.venue
             )
             verified = ok
-            self._log(f"  -> DuckDuckGo: {'PASS ✓' if ok else 'soft fail (kept)'}")
-            # We keep non-Perplexity results even on DDG failure because structured
-            # APIs (S2, CrossRef) are already trustworthy. DDG is best-effort here.
+            self._log(f"  -> DuckDuckGo: {'PASS' if ok else 'soft fail (kept)'}")
 
         best = published_result or arxiv_result
         return {

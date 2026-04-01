@@ -19,3 +19,6 @@ packages = ["bib_checker"]
 dev = [
     "pytest>=8",
 ]
+scholar = [
+    "scholarly",
+]

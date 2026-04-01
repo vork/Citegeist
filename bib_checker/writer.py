@@ -4,6 +4,8 @@ Emits canonical @String definitions first, then entries in their original
 section order (preserving % comments as section separators).
 """
 
+import re
+
 from .strings import CANONICAL_STRINGS
 
 # Fields to emit in a consistent order (others come after, alphabetically)
@@ -17,6 +19,106 @@ FIELD_ORDER = [
 # Fields that should NOT be emitted in the output (internal bookkeeping)
 INTERNAL_FIELDS = {"__key__", "__type__"}
 
+# Fields whose content should get capitalization-protection braces
+_CAP_PROTECT_FIELDS = {"title"}
+
+
+# ---------------------------------------------------------------------------
+# Capitalization protection
+# ---------------------------------------------------------------------------
+
+def _needs_cap_protection(word: str) -> bool:
+    """Return True if *word* needs ``{}`` to survive BibTeX ``change.case$``."""
+    if len(word) <= 1 or word.isdigit():
+        return False
+    alpha = [c for c in word if c.isalpha()]
+    # All-caps acronym with 2+ letters: RL, GRPO, GAN, BERT
+    if len(alpha) >= 2 and all(c.isupper() for c in alpha):
+        return True
+    # Any uppercase letter after the first character: NeRF, 3D, DeepSDF, arXiv
+    if any(c.isupper() for c in word[1:]):
+        return True
+    return False
+
+
+def _protect_caps(text: str) -> str:
+    """Add ``{}`` around words that need capitalization protection.
+
+    Preserves already-braced segments and LaTeX commands unchanged.
+    Only touches bare words that would be mangled by ``change.case$``.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '{':
+            # Already braced — copy the whole group verbatim
+            depth = 1
+            j = i + 1
+            while j < n and depth > 0:
+                if text[j] == '{':
+                    depth += 1
+                elif text[j] == '}':
+                    depth -= 1
+                j += 1
+            result.append(text[i:j])
+            i = j
+        elif ch == '\\':
+            # LaTeX command — copy through (including optional {arg})
+            j = i + 1
+            while j < n and text[j].isalpha():
+                j += 1
+            if j < n and text[j] == '{':
+                depth = 1
+                k = j + 1
+                while k < n and depth > 0:
+                    if text[k] == '{':
+                        depth += 1
+                    elif text[k] == '}':
+                        depth -= 1
+                    k += 1
+                result.append(text[i:k])
+                i = k
+            else:
+                result.append(text[i:j])
+                i = j
+        elif ch.isalnum():
+            # Word (letters + digits, no hyphens — those split words)
+            j = i
+            while j < n and text[j].isalnum():
+                j += 1
+            word = text[i:j]
+            if _needs_cap_protection(word):
+                result.append('{' + word + '}')
+            else:
+                result.append(word)
+            i = j
+        else:
+            result.append(ch)
+            i += 1
+    return ''.join(result)
+
+
+def _protect_title_value(raw: str) -> str:
+    """Apply capitalization protection to a title field value.
+
+    Strips outer delimiters, protects the inner text, and re-wraps.
+    """
+    v = raw.strip()
+    if not v:
+        return v
+    # Strip outer braces/quotes to get the inner content
+    if (v.startswith("{") and v.endswith("}")) or \
+       (v.startswith('"') and v.endswith('"')):
+        inner = v[1:-1]
+        return "{" + _protect_caps(inner) + "}"
+    return _protect_caps(v)
+
+
+# ---------------------------------------------------------------------------
+# Serialization
+# ---------------------------------------------------------------------------
 
 def _serialize_value(raw: str) -> str:
     """
@@ -51,7 +153,10 @@ def _emit_entry(entry: dict) -> str:
     emitted = set()
     for field in FIELD_ORDER:
         if field in field_items and field_items[field].strip():
-            val = _serialize_value(field_items[field])
+            raw = field_items[field]
+            if field in _CAP_PROTECT_FIELDS:
+                raw = _protect_title_value(raw)
+            val = _serialize_value(raw)
             lines.append(f"  {field:<16} = {val},")
             emitted.add(field)
 
@@ -61,7 +166,10 @@ def _emit_entry(entry: dict) -> str:
             continue
         if not field_items[field].strip():
             continue
-        val = _serialize_value(field_items[field])
+        raw = field_items[field]
+        if field in _CAP_PROTECT_FIELDS:
+            raw = _protect_title_value(raw)
+        val = _serialize_value(raw)
         lines.append(f"  {field:<16} = {val},")
 
     # Remove trailing comma from last field
