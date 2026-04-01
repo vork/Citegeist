@@ -249,19 +249,48 @@ def _normalize_single_author(name: str) -> str:
     return f"{family}, {given}"
 
 
+def _is_comma_separated_authors(text: str) -> bool:
+    """Detect when an author field uses commas instead of 'and' as the separator.
+
+    Returns True for strings like ``"First Last, First2 Last2, First3 Last3"``
+    where commas separate distinct authors (rather than the "Last, First" format).
+    """
+    # If there's already an "and", it's not pure comma-separated
+    if re.search(r"\band\b", text, re.IGNORECASE):
+        return False
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    # Need 3+ parts (2 commas minimum) to be confident — a single comma
+    # could be legitimate "Last, First" format for one author
+    if len(parts) < 3:
+        return False
+    # Each part should look like a name: 1–4 words, no inner commas
+    for part in parts:
+        words = part.split()
+        if len(words) < 1 or len(words) > 5:
+            return False
+    return True
+
+
 def _normalize_author_field(raw: str) -> tuple[str, bool]:
     """
     Parse a BibTeX author field string and normalize each name to "Last, First".
 
     Returns (normalized_string, changed) where changed=True if any name was
     actually rewritten.
+
+    Handles both ``and``-separated and comma-separated author lists.
     """
-    # Strip outer braces/quotes
     inner = strip_braces(raw)
-    # Split on " and " (case-insensitive)
-    names = re.split(r"\s+and\s+", inner, flags=re.IGNORECASE)
+
+    # Detect comma-separated author lists and convert to "and"-separated
+    if _is_comma_separated_authors(inner):
+        names = [n.strip() for n in inner.split(",") if n.strip()]
+        changed = True  # we're rewriting the separator
+    else:
+        names = re.split(r"\s+and\s+", inner, flags=re.IGNORECASE)
+        changed = False
+
     normalized = []
-    changed = False
     for name in names:
         fixed = _normalize_single_author(name.strip())
         if fixed != name.strip():
@@ -517,7 +546,14 @@ class BibChecker:
                 published = None
                 verified = False
 
-        if published and published.doi:
+        # Only accept as published if the DOI is a real publication DOI,
+        # not arXiv's own DOI (10.48550/arXiv.*).
+        has_real_doi = (
+            published
+            and published.doi
+            and not published.doi.lower().startswith("10.48550/arxiv")
+        )
+        if has_real_doi:
             venue_str = published.venue or "(unknown venue)"
             verified_note = " [DuckDuckGo verified ✓]" if verified else ""
             new_entry = _build_arxiv_entry(updated, published, strings)

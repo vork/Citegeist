@@ -103,6 +103,17 @@ def _rate_limited_get(url: str, min_interval: float = 1.0, source: str = "defaul
     return None
 
 
+def _is_arxiv_doi(doi: str) -> bool:
+    """Return True if *doi* is arXiv's own DOI (not a real publication DOI)."""
+    return doi.lower().startswith("10.48550/arxiv")
+
+
+def _is_arxiv_venue(venue: str) -> bool:
+    """Return True if *venue* refers to arXiv rather than a real publication venue."""
+    v = venue.strip().lower()
+    return "arxiv" in v
+
+
 def _clean_title(title: str) -> str:
     """Strip LaTeX commands and special chars for use in search queries."""
     # Remove LaTeX commands like \emph{...}, {\em ...}, etc.
@@ -798,12 +809,17 @@ class PublicationLookup:
             print(f"  [search] {msg}")
 
     def _is_published(self, paper: Optional[Paper]) -> bool:
-        """Return True if the Paper represents a formally published work."""
+        """Return True if the Paper represents a formally published work.
+
+        A paper is considered published if it has a real (non-arXiv) DOI or
+        a venue that isn't arXiv.  arXiv's own DOIs (``10.48550/arXiv.*``)
+        do not count as publication.
+        """
         if not paper:
             return False
-        if paper.doi:
+        if paper.doi and not _is_arxiv_doi(paper.doi):
             return True
-        if paper.venue and "arxiv" not in paper.venue.lower():
+        if paper.venue and not _is_arxiv_venue(paper.venue):
             return True
         return False
 
